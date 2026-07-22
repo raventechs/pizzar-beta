@@ -196,6 +196,28 @@ input, select, textarea { border-radius: 10px !important; }
 .toast, [class*="toast"], [id*="toast"] { border-radius: 12px !important; font-weight: 600 !important; }
 /* ──────────────────────────────────────────────────── */
 
+
+/* ── COMANDAS ── */
+.comanda-card { border-radius:14px; padding:14px; margin-bottom:10px; border:2px solid; }
+.comanda-card.estado-nuevo     { border-color:#e74c3c; background:rgba(231,76,60,.08); }
+.comanda-card.estado-preparando{ border-color:#e67e22; background:rgba(230,126,34,.08); }
+.comanda-card.estado-listo     { border-color:#27ae60; background:rgba(39,174,96,.08); }
+.comanda-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+.comanda-num  { font-weight:800; font-size:1rem; }
+.comanda-hora { font-size:0.72rem; color:var(--muted); }
+.comanda-items { font-size:0.82rem; margin-bottom:10px; line-height:1.7; }
+.comanda-btns { display:flex; gap:8px; }
+.btn-comanda  { flex:1; padding:9px; border:none; border-radius:8px; font-weight:700; font-size:0.78rem; cursor:pointer; font-family:inherit; }
+.btn-tomar  { background:#e67e22; color:#fff; }
+.btn-listo  { background:#27ae60; color:#fff; }
+.btn-enviar { background:linear-gradient(135deg,#e74c3c,#c0392b); color:#fff; border:none; border-radius:12px; padding:12px; font-size:0.88rem; font-weight:700; cursor:pointer; width:100%; margin-top:10px; font-family:inherit; box-shadow:0 4px 14px rgba(231,76,60,.35); }
+/* Pantalla cocina */
+#screenCocina { display:none; flex-direction:column; min-height:100vh; background:var(--bg,#0d0d0d); }
+#screenCocina.active { display:flex; }
+.cocina-header { background:#1a1a1a; padding:16px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid #333; }
+.cocina-title  { font-size:1.1rem; font-weight:700; color:#e74c3c; }
+.cocina-body   { flex:1; overflow-y:auto; padding:16px; }
+
 </style>
 </head>
 <body>
@@ -338,7 +360,8 @@ input, select, textarea { border-radius: 10px !important; }
     </section>
 
     <section class="view" id="view-pedidos">
-      <div class="plus-locked"><span class="ti-lock">🛵</span><h4 style="margin-bottom:6px;">Pedidos online</h4><p>Próximamente: tus clientes van a poder pedir desde su celular.</p></div>
+      <div id="comandasLista" style="padding:8px"></div>
+      <div style="text-align:center;padding:20px;color:var(--muted);font-size:0.82rem" id="comandasEmpty">No hay comandas activas</div>
     </section>
 
     <section class="view" id="view-stock">
@@ -380,6 +403,11 @@ input, select, textarea { border-radius: 10px !important; }
         <p style="font-size:0.78rem;color:var(--muted);margin-bottom:8px;">PIN para que el mozo acceda solo a Caja y Menú.</p>
         <input type="text" id="cfgPinMozo" inputmode="numeric" maxlength="6" placeholder="Ej: 1234">
         <button class="btn-tomate" style="margin-top:10px;" id="guardarPinMozoBtn">Guardar PIN Mozo</button>
+        <div style="margin-top:12px;padding:12px;background:rgba(0,0,0,.15);border-radius:10px;border:1px solid var(--border)">
+          <p style="font-size:0.75rem;color:var(--muted);margin-bottom:8px;">📲 Link para el mozo:</p>
+          <div id="linkMozoDisplay" style="font-size:0.7rem;color:#4CAF50;word-break:break-all;padding:6px;background:rgba(0,0,0,.2);border-radius:6px;margin-bottom:8px">—</div>
+          <button class="btn-secondary" id="compartirLinkMozoBtn" style="width:100%;font-size:0.8rem;color:#4CAF50;border-color:#4CAF50">📤 Compartir link mozo por WhatsApp</button>
+        </div>
       </div>
       <div class="config-section" id="cfgWhatsappSection" style="display:none;">
         <h4>WhatsApp para cierre de caja</h4>
@@ -657,7 +685,36 @@ input, select, textarea { border-radius: 10px !important; }
     }
   }
 
-  if (_codigoCajero) {
+  const _codigoMozo = new URLSearchParams(window.location.search).get('mozo');
+  const _codigoCocina = new URLSearchParams(window.location.search).get('cocina');
+
+  async function iniciarComoMozo(codigo) {
+    try {
+      const snap = await db.collection('accesos').doc(codigo).get();
+      if (!snap.exists) {
+        document.getElementById('loadingScreen').classList.add('hide');
+        document.getElementById('loginScreen').classList.add('active');
+        alert('Código inválido. Pedile un link nuevo al dueño.');
+        return;
+      }
+      uidDueno = snap.data().uidDueno;
+      pinMozoActual = snap.data().pin || '1234';
+      document.getElementById('loadingScreen').classList.add('hide');
+      document.getElementById('pinMozoInput').value = '';
+      document.getElementById('pinMozoError').textContent = '';
+      document.getElementById('modalPinMozo').classList.add('active');
+      setTimeout(() => document.getElementById('pinMozoInput').focus(), 50);
+    } catch(e) {
+      document.getElementById('loadingScreen').classList.add('hide');
+      document.getElementById('loginScreen').classList.add('active');
+    }
+  }
+
+  if (_codigoCocina) {
+    iniciarComoCocina(_codigoCocina);
+  } else if (_codigoMozo) {
+    iniciarComoMozo(_codigoMozo);
+  } else if (_codigoCajero) {
     iniciarComoCajero(_codigoCajero);
   } else {
     auth.onAuthStateChanged(async user=>{
@@ -974,13 +1031,17 @@ input, select, textarea { border-radius: 10px !important; }
     });
   });
   document.getElementById('pinMozoCancelBtn').addEventListener('click',()=>document.getElementById('modalPinMozo').classList.remove('active'));
-  document.getElementById('pinMozoConfirmBtn').addEventListener('click',()=>{
+  document.getElementById('pinMozoConfirmBtn').addEventListener('click', async ()=>{
     if(document.getElementById('pinMozoInput').value===pinMozoActual){
       document.getElementById('modalPinMozo').classList.remove('active');
-      auth.signInAnonymously().then(()=>{
-        rolActual='mozo';
-        aplicarRestriccionesPorRol();
-      }).catch(()=>{document.getElementById('pinMozoError').textContent='No se pudo ingresar';});
+      rolActual='mozo';
+      await abrirIDB();
+      document.getElementById('loginScreen').classList.remove('active');
+      document.getElementById('app').classList.add('active');
+      cargarProductos();cargarConfiguracion();
+      aplicarRestriccionesPorRol();
+      actualizarEstadoConexion(navigator.onLine);
+      await actualizarBadge();
     } else {
       document.getElementById('pinMozoError').textContent='PIN incorrecto';
     }
@@ -1147,6 +1208,168 @@ function chequearBackupDiario() {
   }
   function actualizarLinkCajero() { generarCodigoAcceso(); }
 
+
+  // ── Link mozo compartible ──────────────────────────
+  async function generarCodigoMozo() {
+    if (!uidDueno) return;
+    const codigo = Math.floor(100000 + Math.random() * 900000).toString();
+    const pin = pinMozoActual || '1234';
+    try {
+      await db.collection('accesos').doc(codigo).set({
+        uidDueno, pin, app: 'pizzar-mozo',
+        creadoEn: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      const base = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '/');
+      const link = base + '?mozo=' + codigo;
+      const el = document.getElementById('linkMozoDisplay');
+      if (el) el.textContent = link;
+      const btn = document.getElementById('compartirLinkMozoBtn');
+      if (btn) btn.onclick = () => {
+        const nombre = document.getElementById('cfgNombre')?.value || 'PizzAR';
+        const msg = nombre + '\nLink para el mozo:\n' + link + '\nPIN: ' + pin;
+        window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
+      };
+    } catch(e) { logError('generarCodigoMozo', e.message); }
+  }
+
+  // ── COMANDAS DIGITALES ────────────────────────────
+  let comandasUnsub = null;
+  let numOrden = 1;
+
+  // Enviar comanda desde la caja
+  window.enviarComanda = async function() {
+    if (!carrito.length) { toast('El carrito está vacío'); return; }
+    if (!uidDueno) { toast('Error: sesión no disponible'); return; }
+    try {
+      const snap = await db.collection('negocios').doc(uidDueno).collection('comandas')
+        .orderBy('ts','desc').limit(1).get();
+      const ultimoNum = snap.empty ? 0 : (snap.docs[0].data().numero || 0);
+      const numero = ultimoNum + 1;
+      await db.collection('negocios').doc(uidDueno).collection('comandas').add({
+        numero,
+        items: carrito.map(it => it.cantidad + 'x ' + it.nombre),
+        estado: 'nuevo',
+        ts: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      toast('✅ Comanda #' + numero + ' enviada a cocina');
+    } catch(e) { logError('enviarComanda', e.message); toast('Error al enviar comanda'); }
+  };
+
+  // Cambiar estado de comanda
+  window.cambiarEstadoComanda = async function(id, nuevoEstado) {
+    try {
+      await db.collection('negocios').doc(uidDueno).collection('comandas').doc(id)
+        .update({ estado: nuevoEstado });
+    } catch(e) { logError('cambiarEstadoComanda', e.message); }
+  };
+
+  // Eliminar comanda terminada
+  window.eliminarComanda = async function(id) {
+    try {
+      await db.collection('negocios').doc(uidDueno).collection('comandas').doc(id).delete();
+    } catch(e) { logError('eliminarComanda', e.message); }
+  };
+
+  // Escuchar comandas en tiempo real (para la caja)
+  function escucharComandas() {
+    if (comandasUnsub) comandasUnsub();
+    comandasUnsub = db.collection('negocios').doc(uidDueno).collection('comandas')
+      .orderBy('ts','asc')
+      .onSnapshot(snap => {
+        const comandas = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+          .filter(c => c.estado !== 'eliminada');
+        renderComandas(comandas, 'comandasLista', 'comandasEmpty', false);
+      }, e => logError('escucharComandas', e.message));
+  }
+
+  function renderComandas(comandas, listaId, emptyId, esCocina) {
+    const lista  = document.getElementById(listaId);
+    const empty  = document.getElementById(emptyId);
+    if (!lista) return;
+    const activas = comandas.filter(c => c.estado !== 'listo' || esCocina);
+    if (!activas.length) {
+      lista.innerHTML = '';
+      if (empty) empty.style.display = '';
+      return;
+    }
+    if (empty) empty.style.display = 'none';
+    lista.innerHTML = activas.map(c => {
+      const estado = c.estado || 'nuevo';
+      const hora = c.ts?.toDate ? c.ts.toDate().toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}) : '';
+      const btnsTomando = estado === 'nuevo'
+        ? `<button class="btn-comanda btn-tomar" onclick="cambiarEstadoComanda('${c.id}','preparando')">🟠 Tomar</button>`
+        : '';
+      const btnsListo = estado === 'preparando'
+        ? `<button class="btn-comanda btn-listo" onclick="cambiarEstadoComanda('${c.id}','listo')">🟢 Listo</button>`
+        : '';
+      const btnsEliminar = estado === 'listo'
+        ? `<button class="btn-comanda" style="background:#333;color:#aaa" onclick="eliminarComanda('${c.id}')">✕ Cerrar</button>`
+        : '';
+      return '<div class="comanda-card estado-'+estado+'">'
+        +'<div class="comanda-header"><div class="comanda-num">#'+(c.numero||'?')+'</div><div class="comanda-hora">'+hora+'</div></div>'
+        +'<div class="comanda-items">'+(c.items||[]).join('<br>')+'</div>'
+        +'<div class="comanda-btns">'+btnsTomando+btnsListo+btnsEliminar+'</div>'
+        +'</div>';
+    }).join('');
+  }
+
+  // ── PANTALLA COCINA ──────────────────────────────
+  async function iniciarComoCocina(codigo) {
+    try {
+      const snap = await db.collection('accesos').doc(codigo).get();
+      if (!snap.exists) { alert('Código de cocina inválido.'); return; }
+      uidDueno = snap.data().uidDueno;
+      document.getElementById('loadingScreen').classList.add('hide');
+      document.getElementById('screenCocina').classList.add('active');
+      document.getElementById('cocinaStatus').textContent = '🟢 En línea';
+      // Escuchar comandas para cocina
+      db.collection('negocios').doc(uidDueno).collection('comandas')
+        .orderBy('ts','asc')
+        .onSnapshot(snap => {
+          const comandas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          renderComandas(comandas, 'cocinaComandas', 'cocinaEmpty', true);
+        });
+    } catch(e) {
+      alert('Error al conectar: ' + e.message);
+    }
+  }
+
+  // ── Link cocina compartible ──────────────────────
+  async function generarCodigoCocina() {
+    if (!uidDueno) return;
+    const codigo = Math.floor(100000 + Math.random() * 900000).toString();
+    try {
+      await db.collection('accesos').doc(codigo).set({
+        uidDueno, app: 'pizzar-cocina',
+        creadoEn: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      const base = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '/');
+      const link = base + '?cocina=' + codigo;
+      const el = document.getElementById('linkCocinaDisplay');
+      if (el) el.textContent = link;
+      const btn = document.getElementById('compartirLinkCocinaBtn');
+      if (btn) btn.onclick = () => {
+        const msg = 'PizzAR — Pantalla Cocina:\n' + link;
+        window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
+      };
+    } catch(e) { logError('generarCodigoCocina', e.message); }
+  }
+
+  function actualizarLinkMozo()   { generarCodigoMozo(); }
+  function actualizarLinkCocina() { generarCodigoCocina(); }
+
 </script>
+
+<!-- PANTALLA COCINA -->
+<div id="screenCocina">
+  <div class="cocina-header">
+    <div class="cocina-title">🍕 Cocina</div>
+    <div id="cocinaStatus" style="font-size:0.72rem;color:#888">Conectando...</div>
+  </div>
+  <div class="cocina-body" id="cocinaComandas">
+    <div style="text-align:center;padding:40px;color:#555;font-size:0.85rem" id="cocinaEmpty">Esperando pedidos...</div>
+  </div>
+</div>
+
 </body>
 </html>
