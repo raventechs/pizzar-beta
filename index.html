@@ -947,7 +947,8 @@ input, select, textarea { border-radius: 10px !important; }
       const c=doc.exists?doc.data():{};
       document.getElementById('cfgNombre').value=c.nombre||'';document.getElementById('cfgHorario').value=c.horario||'';
       document.getElementById('cfgPinCajero').value=c.pinCajero||'2468';document.getElementById('cfgWhatsapp').value=c.whatsapp||'';
-      pinCajeroActual=c.pinCajero||'2468';whatsappNumero=c.whatsapp||'';
+      pinCajeroActual=c.pinCajero||'2468';
+      actualizarLinkCajero();whatsappNumero=c.whatsapp||'';
       featuresActuales={...featuresActuales,...(c.features||{})};
       document.getElementById('cfgWhatsappSection').style.display=rolActual==='dueño'?'':'none';
       renderPlusStatus();
