@@ -548,7 +548,7 @@ input, select, textarea { border-radius: 10px !important; }
   let categoriaActiva='Todas', grupoActivo=null;
   let productoSeleccionado=null, editandoProductoId=null;
   let featuresActuales={pedidosOnlineHabilitado:false,stockHabilitado:false,empleadosHabilitado:false,gastosHabilitado:false};
-  let rolActual=null, pinCajeroActual='2468', whatsappNumero='';
+  let rolActual=null, pinCajeroActual='2468', whatsappNumero='', uidDueno=null;
   let gastosHoy=[], insumos=[], editandoInsumoId=null;
   let ventasHistorialActual=[], estaOnline=navigator.onLine;
 
@@ -597,9 +597,9 @@ input, select, textarea { border-radius: 10px !important; }
     if(!idb||!estaOnline) return;
     try{
       const ventas=await idbGetAll('ventas_pendientes');
-      for(const v of ventas){const{id,...data}=v;await db.collection('ventas').add({...data,ts:firebase.firestore.FieldValue.serverTimestamp()});await idbDelete('ventas_pendientes',id);}
+      for(const v of ventas){const{id,...data}=v;await db.collection('negocios').doc(uidDueno).collection('ventas').add({...data,ts:firebase.firestore.FieldValue.serverTimestamp()});await idbDelete('ventas_pendientes',id);}
       const cierres=await idbGetAll('cierres_pendientes');
-      for(const c of cierres){const{id,...data}=c;await db.collection('cierres').add({...data,ts:firebase.firestore.FieldValue.serverTimestamp()});await idbDelete('cierres_pendientes',id);}
+      for(const c of cierres){const{id,...data}=c;await db.collection('negocios').doc(uidDueno).collection('cierres').add({...data,ts:firebase.firestore.FieldValue.serverTimestamp()});await idbDelete('cierres_pendientes',id);}
       await actualizarBadge();
       if(ventas.length+cierres.length>0) toast(`✅ ${ventas.length+cierres.length} registros sincronizados`,'ok');
     }catch(e){logError('sync',e.message);}
@@ -632,36 +632,72 @@ input, select, textarea { border-radius: 10px !important; }
     }
   }
 
-  auth.onAuthStateChanged(async user=>{
-    document.getElementById('loadingScreen').classList.add('hide');
-    if(user){
-      await abrirIDB();
-      if(!user.isAnonymous){
-        rolActual='dueño';
-      } else if(rolActual!=='mozo'){
-        rolActual='cajero';
+  // Arquitectura cajero estándar RavenTechs
+  const _codigoCajero = new URLSearchParams(window.location.search).get('cajero');
+
+  async function iniciarComoCajero(codigo) {
+    try {
+      const snap = await db.collection('accesos').doc(codigo).get();
+      if (!snap.exists) {
+        document.getElementById('loadingScreen').classList.add('hide');
+        document.getElementById('loginScreen').classList.add('active');
+        alert('Código inválido. Pedile un link nuevo al dueño.');
+        return;
       }
-      // si rolActual ya era 'mozo' (set antes del trigger) lo respetamos
-      document.getElementById('loginScreen').classList.remove('active');
-      document.getElementById('app').classList.add('active');
-      cargarProductos();cargarInsumos();cargarConfiguracion();cargarGastosHoy();
-      if(rolActual==='dueño') escucharVentasHoy();
-      aplicarRestriccionesPorRol();
-      actualizarEstadoConexion(navigator.onLine);
-      await actualizarBadge();
-    }else{
-      rolActual=null;
-      document.getElementById('app').classList.remove('active');
+      uidDueno = snap.data().uidDueno;
+      pinCajeroActual = snap.data().pin || '2468';
+      document.getElementById('loadingScreen').classList.add('hide');
+      document.getElementById('pinCajeroInput').value = '';
+      document.getElementById('pinCajeroError').textContent = '';
+      document.getElementById('modalPinCajero').classList.add('active');
+      setTimeout(() => document.getElementById('pinCajeroInput').focus(), 50);
+    } catch(e) {
+      document.getElementById('loadingScreen').classList.add('hide');
       document.getElementById('loginScreen').classList.add('active');
     }
-  });
+  }
+
+  if (_codigoCajero) {
+    iniciarComoCajero(_codigoCajero);
+  } else {
+    auth.onAuthStateChanged(async user=>{
+      document.getElementById('loadingScreen').classList.add('hide');
+      if(user){
+        await abrirIDB();
+        uidDueno = user.uid;
+        rolActual = 'dueño';
+        document.getElementById('loginScreen').classList.remove('active');
+        document.getElementById('app').classList.add('active');
+        cargarProductos();cargarInsumos();cargarConfiguracion();cargarGastosHoy();
+        escucharVentasHoy();
+        aplicarRestriccionesPorRol();
+        actualizarEstadoConexion(navigator.onLine);
+        await actualizarBadge();
+      }else{
+        rolActual=null;
+        document.getElementById('app').classList.remove('active');
+        document.getElementById('loginScreen').classList.add('active');
+      }
+    });
+  }
 
   document.getElementById('loginBtn').addEventListener('click',()=>{auth.signInWithEmailAndPassword(document.getElementById('loginEmail').value.trim(),document.getElementById('loginPass').value).catch(()=>{document.getElementById('loginError').textContent='Email o contraseña incorrectos';});});
   document.getElementById('logoutBtn').addEventListener('click',()=>{rolActual=null;auth.signOut();});
   document.getElementById('loginGoogleBtn').addEventListener('click',()=>{auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(()=>{document.getElementById('loginError').textContent='No se pudo iniciar sesión con Google';});});
-  document.getElementById('loginCajeroBtn').addEventListener('click',()=>{db.collection('configuracion').doc('general').get().then(doc=>{pinCajeroActual=(doc.exists&&doc.data().pinCajero)?doc.data().pinCajero:'2468';document.getElementById('pinCajeroInput').value='';document.getElementById('pinCajeroError').textContent='';document.getElementById('modalPinCajero').classList.add('active');setTimeout(()=>document.getElementById('pinCajeroInput').focus(),50);});});
   document.getElementById('pinCajeroCancelBtn').addEventListener('click',()=>document.getElementById('modalPinCajero').classList.remove('active'));
-  document.getElementById('pinCajeroConfirmBtn').addEventListener('click',()=>{if(document.getElementById('pinCajeroInput').value===pinCajeroActual){document.getElementById('modalPinCajero').classList.remove('active');auth.signInAnonymously().catch(()=>{document.getElementById('pinCajeroError').textContent='No se pudo ingresar';});}else{document.getElementById('pinCajeroError').textContent='PIN incorrecto';}});
+  document.getElementById('pinCajeroConfirmBtn').addEventListener('click', async ()=>{
+    if(document.getElementById('pinCajeroInput').value===pinCajeroActual){
+      document.getElementById('modalPinCajero').classList.remove('active');
+      rolActual='cajero';
+      await abrirIDB();
+      document.getElementById('loginScreen').classList.remove('active');
+      document.getElementById('app').classList.add('active');
+      cargarProductos();cargarInsumos();cargarConfiguracion();cargarGastosHoy();
+      aplicarRestriccionesPorRol();
+      actualizarEstadoConexion(navigator.onLine);
+      await actualizarBadge();
+    }else{document.getElementById('pinCajeroError').textContent='PIN incorrecto';}
+  });
   document.getElementById('pinCajeroInput').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('pinCajeroConfirmBtn').click();});
   document.getElementById('darkToggleBtn').addEventListener('click',()=>{document.body.classList.toggle('light');document.getElementById('darkToggleBtn').textContent=document.body.classList.contains('light')?'☀️':'🌙';});
 
@@ -670,7 +706,7 @@ input, select, textarea { border-radius: 10px !important; }
   /* ════ PRODUCTOS ════ */
   function cargarProductos(){
     if(!estaOnline){idbGetCatalogo().then(prods=>{if(prods.length>0){productos=prods;renderCatFilters();renderProductosGrid();renderProductosLista();}});return;}
-    db.collection('productos').onSnapshot(snap=>{
+    db.collection('negocios').doc(uidDueno).collection('productos').onSnapshot(snap=>{
       productos=snap.docs.map(d=>({id:d.id,...d.data()}));
       if(!productos.length) precargarMenuEjemplo();
       if(idb) idbCacheCatalogo(productos);
@@ -689,7 +725,7 @@ input, select, textarea { border-radius: 10px !important; }
     min('Hamburguesa simple','🍔',3200),min('Hamburguesa completa','🍔',4200),min('Milanesa de carne','🍖',5500),min('Milanesa napolitana','🍖',6200),min('Sándwich de milanesa','🥪',4500),min('Lomito completo','🥪',6500),min('Choripán','🌭',3000),min('Papas fritas chicas','🍟',2200),min('Papas fritas grandes','🍟',3500),min('Provoleta','🧀',4000),
     beb('Coca-Cola','🥤','Gaseosas',{'500ml':1500,'1.25L':2200,'1.5L':2500,'2.25L':3200}),beb('Sprite','🥤','Gaseosas',{'500ml':1400,'1.5L':2400}),beb('Agua sin gas','💧','Aguas',{'500ml':1000,'1.5L':1700}),beb('Quilmes','🍺','Cervezas',{'Lata 354ml':1800,'Litro':2900}),
     simp('Pan de ajo chico','🍞','Extras',1800),simp('Pan de ajo grande','🍞','Extras',2800),simp('Flan casero','🍮','Postres',2000),simp('Helado 1/4kg','🍨','Postres',2500),
-    ].forEach(p=>db.collection('productos').add(p));
+    ].forEach(p=>db.collection('negocios').doc(uidDueno).collection('productos').add(p));
   }
 
   const GRUPOS_MAP={'Pizzas':'Pizzas','Empanadas':'Empanadas','Minutas':'Minutas','Gaseosas':'Bebidas','Cervezas':'Bebidas','Aguas':'Bebidas','Extras':'Extras','Postres':'Postres'};
@@ -749,7 +785,7 @@ input, select, textarea { border-radius: 10px !important; }
     const itemsVendidos=carrito.slice();
     const ventaData={items:carrito,total,metodoPago,fecha:new Date().toISOString(),fechaDia:new Date().toISOString().slice(0,10)};
     if(estaOnline){
-      try{await db.collection('ventas').add({...ventaData,ts:firebase.firestore.FieldValue.serverTimestamp()});descontarStockPorVenta(itemsVendidos);toast('Venta registrada — $'+total);}
+      try{await db.collection('negocios').doc(uidDueno).collection('ventas').add({...ventaData,ts:firebase.firestore.FieldValue.serverTimestamp()});descontarStockPorVenta(itemsVendidos);toast('Venta registrada — $'+total);}
       catch(e){logError('cobrar',e.message);toast('Error al guardar. Reintentá.');return;}
     }else{
       await idbAdd('ventas_pendientes',ventaData);await actualizarBadge();toast('📴 Venta guardada offline — se sincronizará al reconectar');
@@ -761,7 +797,7 @@ input, select, textarea { border-radius: 10px !important; }
   function renderProductosLista(){
     document.getElementById('productosLista').innerHTML=productos.map(p=>`<div class="producto-row"><div><div class="producto-row-name">${p.emoji||'🍕'} ${p.nombre}</div><div class="producto-row-meta">${p.categoria} — ${p.activo?'Activo':'Inactivo'}</div></div><div class="row-actions"><button data-edit="${p.id}">✏️</button><button data-del="${p.id}">🗑️</button></div></div>`).join('');
     document.querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>abrirModalProducto(b.dataset.edit)));
-    document.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>{if(confirm('¿Eliminar este producto?'))db.collection('productos').doc(b.dataset.del).delete().then(()=>toast('Producto eliminado'));}));
+    document.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>{if(confirm('¿Eliminar este producto?'))db.collection('negocios').doc(uidDueno).collection('productos').doc(b.dataset.del).delete().then(()=>toast('Producto eliminado'));}));
   }
 
   document.getElementById('nuevoProductoBtn').addEventListener('click',()=>abrirModalProducto(null));
@@ -811,7 +847,7 @@ input, select, textarea { border-radius: 10px !important; }
     tamanosEditando.forEach(t=>{if(!t.nombre)return;precios[t.nombre]=t.precio;const rl=(t.receta||[]).filter(r=>r.insumoId&&r.cantidad>0);if(rl.length)recetaPorTamano[t.nombre]=rl;});
     const data={nombre:document.getElementById('prodNombre').value.trim(),categoria:document.getElementById('prodCategoria').value,emoji:document.getElementById('prodEmoji').value.trim(),precios,recetaPorTamano,receta:firebase.firestore.FieldValue.delete(),activo:document.getElementById('prodActivo').checked};
     if(!data.nombre){toast('Falta el nombre');return;}if(!Object.keys(precios).length){toast('Agregá al menos un tamaño');return;}
-    const ref=editandoProductoId?db.collection('productos').doc(editandoProductoId):db.collection('productos').doc();
+    const ref=editandoProductoId?db.collection('negocios').doc(uidDueno).collection('productos').doc(editandoProductoId):db.collection('negocios').doc(uidDueno).collection('productos').doc();
     ref.set(data,{merge:true}).then(()=>{toast('Producto guardado');document.getElementById('modalProducto').classList.remove('active');});
   });
 
@@ -821,21 +857,21 @@ input, select, textarea { border-radius: 10px !important; }
     Object.values(grupos).forEach(lista=>{if(lista.length<=1)return;gCount++;lista.sort((a,b)=>cr(b)-cr(a));lista.slice(1).forEach(p=>aBorrar.push(p.id));});
     if(!aBorrar.length){toast('No se encontraron duplicados');return;}
     if(!confirm(`Se eliminan ${aBorrar.length} duplicados (${gCount} grupos). ¿Continuar?`))return;
-    const batch=db.batch();aBorrar.forEach(id=>batch.delete(db.collection('productos').doc(id)));batch.commit().then(()=>toast(`${aBorrar.length} duplicados eliminados`));
+    const batch=db.batch();aBorrar.forEach(id=>batch.delete(db.collection('negocios').doc(uidDueno).collection('productos').doc(id)));batch.commit().then(()=>toast(`${aBorrar.length} duplicados eliminados`));
   });
 
   document.getElementById('restablecerCatalogoBtn').addEventListener('click',()=>{
     if(!confirm('Esto va a BORRAR todos los productos actuales. ¿Seguro?'))return;
     if(!confirm('Confirmá: se borran todos y se carga el catálogo de ejemplo. ¿Continuar?'))return;
-    db.collection('productos').get().then(snap=>{const b=db.batch();snap.docs.forEach(doc=>b.delete(doc.ref));return b.commit();}).then(()=>{precargarMenuEjemplo();toast('Catálogo restablecido');});
+    db.collection('negocios').doc(uidDueno).collection('productos').get().then(snap=>{const b=db.batch();snap.docs.forEach(doc=>b.delete(doc.ref));return b.commit();}).then(()=>{precargarMenuEjemplo();toast('Catálogo restablecido');});
   });
 
   /* ════ STOCK ════ */
-  function cargarInsumos(){db.collection('insumos').onSnapshot(snap=>{insumos=snap.docs.map(d=>({id:d.id,...d.data()}));renderInsumosLista();});}
+  function cargarInsumos(){db.collection('negocios').doc(uidDueno).collection('insumos').onSnapshot(snap=>{insumos=snap.docs.map(d=>({id:d.id,...d.data()}));renderInsumosLista();});}
 
   function listaInsumosBasicos(){const i=(n,u,sa,sm)=>({nombre:n,unidad:u,stockActual:sa,stockMinimo:sm});return[i('Harina','kg',25,5),i('Mozzarella','kg',15,3),i('Salsa de tomate','kg',10,2),i('Aceite','L',8,2),i('Levadura','kg',1,0.2),i('Sal','kg',5,1),i('Jamón','kg',5,1),i('Morrones','kg',3,0.5),i('Aceitunas','kg',2,0.5),i('Huevo','unidad',60,12),i('Carne picada','kg',10,2),i('Pollo','kg',8,2),i('Coca-Cola 500ml','unidad',24,6),i('Coca-Cola 1.5L','unidad',12,3),i('Agua sin gas 500ml','unidad',24,6),i('Cerveza Quilmes lata','unidad',24,6)];}
 
-  document.getElementById('cargarBasicosBtn').addEventListener('click',()=>{const ex=new Set(insumos.map(i=>i.nombre.trim().toLowerCase()));const falt=listaInsumosBasicos().filter(b=>!ex.has(b.nombre.trim().toLowerCase()));if(!falt.length){toast('Ya tenés todos los insumos básicos');return;}falt.forEach(i=>db.collection('insumos').add(i));toast(`Se agregaron ${falt.length} insumos básicos`);});
+  document.getElementById('cargarBasicosBtn').addEventListener('click',()=>{const ex=new Set(insumos.map(i=>i.nombre.trim().toLowerCase()));const falt=listaInsumosBasicos().filter(b=>!ex.has(b.nombre.trim().toLowerCase()));if(!falt.length){toast('Ya tenés todos los insumos básicos');return;}falt.forEach(i=>db.collection('negocios').doc(uidDueno).collection('insumos').add(i));toast(`Se agregaron ${falt.length} insumos básicos`);});
 
   function renderInsumosLista(){
     const dl=document.getElementById('insumosDatalist');if(dl)dl.innerHTML=insumos.map(i=>`<option value="${i.nombre}"></option>`).join('');
@@ -843,26 +879,26 @@ input, select, textarea { border-radius: 10px !important; }
     if(!insumos.length){cont.innerHTML='<p style="color:var(--muted);font-size:0.85rem;">Todavía no cargaste insumos.</p>';return;}
     cont.innerHTML=insumos.map(ins=>{const bajo=ins.stockActual<=ins.stockMinimo;return`<div class="producto-row"><div><div class="producto-row-name">${bajo?'⚠️ ':''}${ins.nombre}</div><div class="producto-row-meta" style="${bajo?'color:var(--tomate);font-weight:600;':''}">Stock: ${ins.stockActual} ${ins.unidad} (mínimo ${ins.stockMinimo})</div></div><div class="row-actions"><button data-editins="${ins.id}">✏️</button><button data-delins="${ins.id}">🗑️</button></div></div>`;}).join('');
     cont.querySelectorAll('[data-editins]').forEach(b=>b.addEventListener('click',()=>abrirModalInsumo(b.dataset.editins)));
-    cont.querySelectorAll('[data-delins]').forEach(b=>b.addEventListener('click',()=>{if(confirm('¿Eliminar este insumo?'))db.collection('insumos').doc(b.dataset.delins).delete().then(()=>toast('Insumo eliminado'));}));
+    cont.querySelectorAll('[data-delins]').forEach(b=>b.addEventListener('click',()=>{if(confirm('¿Eliminar este insumo?'))db.collection('negocios').doc(uidDueno).collection('insumos').doc(b.dataset.delins).delete().then(()=>toast('Insumo eliminado'));}));
   }
 
   document.getElementById('nuevoInsumoBtn').addEventListener('click',()=>abrirModalInsumo(null));
   function abrirModalInsumo(id){editandoInsumoId=id;const ins=id?insumos.find(x=>x.id===id):null;document.getElementById('modalInsumoTitulo').textContent=id?'Editar insumo':'Nuevo insumo';document.getElementById('insNombre').value=ins?ins.nombre:'';document.getElementById('insUnidad').value=ins?ins.unidad:'kg';document.getElementById('insStockActual').value=ins?ins.stockActual:0;document.getElementById('insStockMinimo').value=ins?ins.stockMinimo:0;document.getElementById('modalInsumo').classList.add('active');}
   document.getElementById('modalInsumoCancel').addEventListener('click',()=>document.getElementById('modalInsumo').classList.remove('active'));
-  document.getElementById('modalInsumoConfirm').addEventListener('click',()=>{const data={nombre:document.getElementById('insNombre').value.trim(),unidad:document.getElementById('insUnidad').value,stockActual:parseFloat(document.getElementById('insStockActual').value)||0,stockMinimo:parseFloat(document.getElementById('insStockMinimo').value)||0};if(!data.nombre){toast('Falta el nombre');return;}const ref=editandoInsumoId?db.collection('insumos').doc(editandoInsumoId):db.collection('insumos').doc();ref.set(data,{merge:true}).then(()=>{toast('Insumo guardado');document.getElementById('modalInsumo').classList.remove('active');});});
+  document.getElementById('modalInsumoConfirm').addEventListener('click',()=>{const data={nombre:document.getElementById('insNombre').value.trim(),unidad:document.getElementById('insUnidad').value,stockActual:parseFloat(document.getElementById('insStockActual').value)||0,stockMinimo:parseFloat(document.getElementById('insStockMinimo').value)||0};if(!data.nombre){toast('Falta el nombre');return;}const ref=editandoInsumoId?db.collection('negocios').doc(uidDueno).collection('insumos').doc(editandoInsumoId):db.collection('negocios').doc(uidDueno).collection('insumos').doc();ref.set(data,{merge:true}).then(()=>{toast('Insumo guardado');document.getElementById('modalInsumo').classList.remove('active');});});
 
   function descontarStockPorVenta(items){
     if(!insumos.length)return;const desc={};
     items.forEach(item=>{const prod=productos.find(p=>p.id===item.productoId);if(!prod)return;let receta=(prod.recetaPorTamano&&prod.recetaPorTamano[item.tamano])||[];if(!receta.length&&prod.receta)receta=prod.receta;if(!receta.length)return;receta.forEach(r=>{desc[r.insumoId]=(desc[r.insumoId]||0)+(r.cantidad*item.cantidad);});});
     const ids=Object.keys(desc);if(!ids.length)return;
-    const batch=db.batch();ids.forEach(id=>batch.update(db.collection('insumos').doc(id),{stockActual:firebase.firestore.FieldValue.increment(-desc[id])}));
+    const batch=db.batch();ids.forEach(id=>batch.update(db.collection('negocios').doc(uidDueno).collection('insumos').doc(id),{stockActual:firebase.firestore.FieldValue.increment(-desc[id])}));
     batch.commit().catch(e=>logError('descuentoStock',e));
   }
 
   /* ════ REPORTES ════ */
   function escucharVentasHoy(){
     const hoy=new Date().toISOString().slice(0,10);
-    db.collection('ventas').where('fechaDia','==',hoy).onSnapshot(snap=>{
+    db.collection('negocios').doc(uidDueno).collection('ventas').where('fechaDia','==',hoy).onSnapshot(snap=>{
       const ventas=snap.docs.map(d=>d.data());
       document.getElementById('repPedidosDia').textContent=ventas.length;
       document.getElementById('repIngresosDia').textContent='$'+ventas.reduce((s,v)=>s+(v.total||0),0);
@@ -882,7 +918,7 @@ input, select, textarea { border-radius: 10px !important; }
     else if(preset==='semana'){const i=new Date(hoy);i.setDate(hoy.getDate()-6);desde=fechaISO(i);hasta=fechaISO(hoy);}
     else{desde=document.getElementById('historialDesde').value;hasta=document.getElementById('historialHasta').value;if(!desde||!hasta){toast('Elegí ambas fechas');return;}}
     let ventas=[];
-    if(estaOnline){const snap=await db.collection('ventas').where('fechaDia','>=',desde).where('fechaDia','<=',hasta).get();ventas=snap.docs.map(d=>d.data()).sort((a,b)=>(b.fechaDia||'').localeCompare(a.fechaDia||''));}
+    if(estaOnline){const snap=await db.collection('negocios').doc(uidDueno).collection('ventas').where('fechaDia','>=',desde).where('fechaDia','<=',hasta).get();ventas=snap.docs.map(d=>d.data()).sort((a,b)=>(b.fechaDia||'').localeCompare(a.fechaDia||''));}
     else{const pend=await idbGetAll('ventas_pendientes');ventas=pend.filter(v=>v.fechaDia>=desde&&v.fechaDia<=hasta).sort((a,b)=>(b.fechaDia||'').localeCompare(a.fechaDia||''));toast('📴 Mostrando ventas offline del período');}
     ventasHistorialActual=ventas;
     document.getElementById('histCantVentas').textContent=ventas.length;
@@ -892,7 +928,7 @@ input, select, textarea { border-radius: 10px !important; }
 
   document.getElementById('exportCSVBtn').addEventListener('click',async()=>{
     let ventas=ventasHistorialActual;
-    if(!ventas.length){if(estaOnline){const snap=await db.collection('ventas').where('fechaDia','==',fechaISO(new Date())).get();ventas=snap.docs.map(d=>d.data());}else{ventas=await idbGetAll('ventas_pendientes');}}
+    if(!ventas.length){if(estaOnline){const snap=await db.collection('negocios').doc(uidDueno).collection('ventas').where('fechaDia','==',fechaISO(new Date())).get();ventas=snap.docs.map(d=>d.data());}else{ventas=await idbGetAll('ventas_pendientes');}}
     if(!ventas.length){toast('No hay ventas para exportar');return;}
     const filas=[['Fecha','Método de pago','Total','Productos']];
     ventas.forEach(v=>{const prods=(v.items||[]).map(it=>`${it.nombre} (${it.tamano}) x${it.cantidad}`).join(' | ');filas.push([v.fechaDia||'',v.metodoPago||'',v.total||0,prods]);});
@@ -906,7 +942,7 @@ input, select, textarea { border-radius: 10px !important; }
 
   /* ════ CONFIGURACIÓN ════ */
   function cargarConfiguracion(){
-    db.collection('configuracion').doc('general').get().then(doc=>{
+    db.collection('negocios').doc(uidDueno).collection('configuracion').doc('general').get().then(doc=>{
       const c=doc.exists?doc.data():{};
       document.getElementById('cfgNombre').value=c.nombre||'';document.getElementById('cfgHorario').value=c.horario||'';
       document.getElementById('cfgPinCajero').value=c.pinCajero||'2468';document.getElementById('cfgWhatsapp').value=c.whatsapp||'';
@@ -916,14 +952,14 @@ input, select, textarea { border-radius: 10px !important; }
       renderPlusStatus();
     });
   }
-  document.getElementById('guardarCfgBtn').addEventListener('click',()=>{db.collection('configuracion').doc('general').set({nombre:document.getElementById('cfgNombre').value.trim(),horario:document.getElementById('cfgHorario').value.trim()},{merge:true}).then(()=>toast('Configuración guardada'));});
-  document.getElementById('guardarPinCajeroBtn').addEventListener('click',()=>{const pin=document.getElementById('cfgPinCajero').value.trim();if(!pin||pin.length<4){toast('El PIN debe tener al menos 4 dígitos');return;}db.collection('configuracion').doc('general').set({pinCajero:pin},{merge:true}).then(()=>{pinCajeroActual=pin;toast('PIN actualizado');});});
+  document.getElementById('guardarCfgBtn').addEventListener('click',()=>{db.collection('negocios').doc(uidDueno).collection('configuracion').doc('general').set({nombre:document.getElementById('cfgNombre').value.trim(),horario:document.getElementById('cfgHorario').value.trim()},{merge:true}).then(()=>toast('Configuración guardada'));});
+  document.getElementById('guardarPinCajeroBtn').addEventListener('click',()=>{const pin=document.getElementById('cfgPinCajero').value.trim();if(!pin||pin.length<4){toast('El PIN debe tener al menos 4 dígitos');return;}db.collection('negocios').doc(uidDueno).collection('configuracion').doc('general').set({pinCajero:pin},{merge:true}).then(()=>{pinCajeroActual=pin;toast('PIN actualizado');});});
 
   /* ═══ MOZO — login por PIN ═══ */
   let pinMozoActual = '1234';
 
   document.getElementById('loginMozoBtn').addEventListener('click',()=>{
-    db.collection('configuracion').doc('general').get().then(doc=>{
+    db.collection('negocios').doc(uidDueno).collection('configuracion').doc('general').get().then(doc=>{
       pinMozoActual=(doc.exists&&doc.data().pinMozo)?doc.data().pinMozo:'1234';
       document.getElementById('pinMozoInput').value='';
       document.getElementById('pinMozoError').textContent='';
@@ -952,9 +988,9 @@ input, select, textarea { border-radius: 10px !important; }
   document.getElementById('guardarPinMozoBtn').addEventListener('click',()=>{
     const pin=document.getElementById('cfgPinMozo').value.trim();
     if(!pin||pin.length<4){toast('El PIN debe tener al menos 4 dígitos');return;}
-    db.collection('configuracion').doc('general').set({pinMozo:pin},{merge:true}).then(()=>{pinMozoActual=pin;toast('PIN Mozo actualizado');});
+    db.collection('negocios').doc(uidDueno).collection('configuracion').doc('general').set({pinMozo:pin},{merge:true}).then(()=>{pinMozoActual=pin;toast('PIN Mozo actualizado');});
   });;
-  document.getElementById('guardarWhatsappBtn').addEventListener('click',()=>{const num=document.getElementById('cfgWhatsapp').value.trim().replace(/\D/g,'');if(!num||num.length<10){toast('Número inválido');return;}db.collection('configuracion').doc('general').set({whatsapp:num},{merge:true}).then(()=>{whatsappNumero=num;toast('Número guardado');});});
+  document.getElementById('guardarWhatsappBtn').addEventListener('click',()=>{const num=document.getElementById('cfgWhatsapp').value.trim().replace(/\D/g,'');if(!num||num.length<10){toast('Número inválido');return;}db.collection('negocios').doc(uidDueno).collection('configuracion').doc('general').set({whatsapp:num},{merge:true}).then(()=>{whatsappNumero=num;toast('Número guardado');});});
 
   function renderPlusStatus(){document.querySelectorAll('.plus-status').forEach(el=>{el.textContent=featuresActuales[el.dataset.flag]?'✅':'🔒';});aplicarTabsPlus();}
   function aplicarTabsPlus(){
@@ -966,17 +1002,17 @@ input, select, textarea { border-radius: 10px !important; }
 
   /* ════ GASTOS ════ */
   function hoyISO(){return new Date().toISOString().slice(0,10);}
-  function cargarGastosHoy(){db.collection('gastos').where('fechaDia','==',hoyISO()).onSnapshot(snap=>{gastosHoy=snap.docs.map(d=>({id:d.id,...d.data()}));renderGastosLista();},e=>logError('gastos-snap',e));}
-  function renderGastosLista(){const cont=document.getElementById('gastosLista');if(!cont)return;if(!gastosHoy.length){cont.innerHTML='<p style="font-size:0.78rem;color:var(--muted);">Sin gastos registrados hoy.</p>';return;}cont.innerHTML=gastosHoy.map(g=>`<div class="carrito-item" style="margin-bottom:4px;"><div class="carrito-item-info">${g.descripcion}</div><div style="color:var(--tomate);font-weight:700;">-$${g.monto}</div><button style="background:none;border:none;color:var(--muted);cursor:pointer;" data-delgasto="${g.id}">✕</button></div>`).join('');cont.querySelectorAll('[data-delgasto]').forEach(b=>b.addEventListener('click',()=>{db.collection('gastos').doc(b.dataset.delgasto).delete().catch(e=>logError('del-gasto',e));}));}
+  function cargarGastosHoy(){db.collection('negocios').doc(uidDueno).collection('gastos').where('fechaDia','==',hoyISO()).onSnapshot(snap=>{gastosHoy=snap.docs.map(d=>({id:d.id,...d.data()}));renderGastosLista();},e=>logError('gastos-snap',e));}
+  function renderGastosLista(){const cont=document.getElementById('gastosLista');if(!cont)return;if(!gastosHoy.length){cont.innerHTML='<p style="font-size:0.78rem;color:var(--muted);">Sin gastos registrados hoy.</p>';return;}cont.innerHTML=gastosHoy.map(g=>`<div class="carrito-item" style="margin-bottom:4px;"><div class="carrito-item-info">${g.descripcion}</div><div style="color:var(--tomate);font-weight:700;">-$${g.monto}</div><button style="background:none;border:none;color:var(--muted);cursor:pointer;" data-delgasto="${g.id}">✕</button></div>`).join('');cont.querySelectorAll('[data-delgasto]').forEach(b=>b.addEventListener('click',()=>{db.collection('negocios').doc(uidDueno).collection('gastos').doc(b.dataset.delgasto).delete().catch(e=>logError('del-gasto',e));}));}
   document.getElementById('btnAgregarGasto').addEventListener('click',()=>{document.getElementById('gastoDesc').value='';document.getElementById('gastoMonto').value='';document.getElementById('modalGasto').classList.add('active');setTimeout(()=>document.getElementById('gastoDesc').focus(),50);});
   document.getElementById('modalGastoCancel').addEventListener('click',()=>document.getElementById('modalGasto').classList.remove('active'));
-  document.getElementById('modalGastoConfirm').addEventListener('click',()=>{const desc=document.getElementById('gastoDesc').value.trim();const monto=parseFloat(document.getElementById('gastoMonto').value)||0;if(!desc){toast('Ingresá una descripción');return;}if(monto<=0){toast('Ingresá un monto mayor a 0');return;}db.collection('gastos').add({descripcion:desc,monto,fechaDia:hoyISO(),ts:firebase.firestore.FieldValue.serverTimestamp()}).then(()=>{toast('Gasto registrado');document.getElementById('modalGasto').classList.remove('active');}).catch(e=>logError('add-gasto',e));});
+  document.getElementById('modalGastoConfirm').addEventListener('click',()=>{const desc=document.getElementById('gastoDesc').value.trim();const monto=parseFloat(document.getElementById('gastoMonto').value)||0;if(!desc){toast('Ingresá una descripción');return;}if(monto<=0){toast('Ingresá un monto mayor a 0');return;}db.collection('negocios').doc(uidDueno).collection('gastos').add({descripcion:desc,monto,fechaDia:hoyISO(),ts:firebase.firestore.FieldValue.serverTimestamp()}).then(()=>{toast('Gasto registrado');document.getElementById('modalGasto').classList.remove('active');}).catch(e=>logError('add-gasto',e));});
 
   /* ════ CIERRE DE CAJA ════ */
   document.getElementById('btnCerrarCaja').addEventListener('click',async()=>{
     if(!whatsappNumero){toast('Configurá el número de WhatsApp en Configuración','warn');return;}
     let ventasHoy=[];
-    if(estaOnline){try{const snap=await db.collection('ventas').where('fechaDia','==',hoyISO()).get();ventasHoy=snap.docs.map(d=>d.data());}catch(e){logError('cierre-ventas',e);}}
+    if(estaOnline){try{const snap=await db.collection('negocios').doc(uidDueno).collection('ventas').where('fechaDia','==',hoyISO()).get();ventasHoy=snap.docs.map(d=>d.data());}catch(e){logError('cierre-ventas',e);}}
     else{const pend=await idbGetAll('ventas_pendientes');ventasHoy=pend.filter(v=>v.fechaDia===hoyISO());}
     let totalEfectivo=0,totalDebito=0,totalTransferencia=0,totalPizzas=0,totalEmpanadas=0;
     ventasHoy.forEach(v=>{const m=v.total||0;if(v.metodoPago==='efectivo')totalEfectivo+=m;else if(v.metodoPago==='debito')totalDebito+=m;else if(v.metodoPago==='transferencia')totalTransferencia+=m;(v.items||[]).forEach(it=>{const prod=productos.find(p=>p.id===it.productoId);if(!prod)return;if(prod.categoria==='Pizzas')totalPizzas+=it.cantidad;if(prod.categoria==='Empanadas'){const tam=(it.tamano||'').toLowerCase();if(tam.includes('docena')&&!tam.includes('media'))totalEmpanadas+=12*it.cantidad;else if(tam.includes('media'))totalEmpanadas+=6*it.cantidad;else totalEmpanadas+=it.cantidad;}});});
@@ -997,7 +1033,7 @@ input, select, textarea { border-radius: 10px !important; }
     const modal=document.getElementById('modalCierre');
     const resumen=modal.dataset.resumen;
     const cierreData={fechaDia:hoyISO(),fechaISO:new Date().toISOString(),totalEfectivo:parseFloat(modal.dataset.totalEfectivo)||0,totalDebito:parseFloat(modal.dataset.totalDebito)||0,totalTransferencia:parseFloat(modal.dataset.totalTransferencia)||0,totalPizzas:parseInt(modal.dataset.totalPizzas)||0,totalEmpanadas:parseInt(modal.dataset.totalEmpanadas)||0,totalGastos:parseFloat(modal.dataset.totalGastos)||0};
-    if(estaOnline){try{await db.collection('cierres').add({...cierreData,ts:firebase.firestore.FieldValue.serverTimestamp()});}catch(e){logError('guardar-cierre',e);}}
+    if(estaOnline){try{await db.collection('negocios').doc(uidDueno).collection('cierres').add({...cierreData,ts:firebase.firestore.FieldValue.serverTimestamp()});}catch(e){logError('guardar-cierre',e);}}
     else{await idbAdd('cierres_pendientes',cierreData);await actualizarBadge();toast('📴 Cierre guardado offline — se sincronizará al reconectar');}
     carrito=[];metodoPago='efectivo';document.querySelectorAll('.pago-chip').forEach(c=>c.classList.remove('active'));document.querySelector('.pago-chip[data-pago="efectivo"]').classList.add('active');renderCarrito();
     modal.classList.remove('active');
@@ -1020,7 +1056,7 @@ input, select, textarea { border-radius: 10px !important; }
   document.getElementById('modalFeaturesCancel').addEventListener('click',()=>document.getElementById('modalFeatures').classList.remove('active'));
   document.getElementById('modalFeaturesGuardar').addEventListener('click',()=>{
     const nuevas={pedidosOnlineHabilitado:document.getElementById('flagPedidos').checked,stockHabilitado:document.getElementById('flagStock').checked,empleadosHabilitado:document.getElementById('flagEmpleados').checked,gastosHabilitado:document.getElementById('flagGastos').checked};
-    db.collection('configuracion').doc('general').set({features:nuevas},{merge:true}).then(()=>{featuresActuales=nuevas;renderPlusStatus();toast('Features actualizadas');document.getElementById('modalFeatures').classList.remove('active');});
+    db.collection('negocios').doc(uidDueno).collection('configuracion').doc('general').set({features:nuevas},{merge:true}).then(()=>{featuresActuales=nuevas;renderPlusStatus();toast('Features actualizadas');document.getElementById('modalFeatures').classList.remove('active');});
   });
 
   /* P3 ROBUSTEZ — SERVICE WORKER */
@@ -1032,11 +1068,11 @@ async function generarBackup(silencioso) {
   var uid = auth.currentUser ? auth.currentUser.uid : null;
   if (!uid) return;
   try {
-    var ventasSnap = await db.collection('ventas').get().catch(function(){return {docs:[]}});
-    var productosSnap = await db.collection('productos').get().catch(function(){return {docs:[]}});
-    var insumosSnap = await db.collection('insumos').get().catch(function(){return {docs:[]}});
-    var cierresSnap = await db.collection('cierres').get().catch(function(){return {docs:[]}});
-    var configSnap = await db.collection('configuracion').doc('general').get().catch(function(){return {exists:false}});
+    var ventasSnap = await db.collection('negocios').doc(uidDueno).collection('ventas').get().catch(function(){return {docs:[]}});
+    var productosSnap = await db.collection('negocios').doc(uidDueno).collection('productos').get().catch(function(){return {docs:[]}});
+    var insumosSnap = await db.collection('negocios').doc(uidDueno).collection('insumos').get().catch(function(){return {docs:[]}});
+    var cierresSnap = await db.collection('negocios').doc(uidDueno).collection('cierres').get().catch(function(){return {docs:[]}});
+    var configSnap = await db.collection('negocios').doc(uidDueno).collection('configuracion').doc('general').get().catch(function(){return {exists:false}});
     var fecha = new Date().toISOString().slice(0,10);
     var backup = {
       app:'PizzAR', version:'2.6', fecha:new Date().toISOString(), uid:uid,
@@ -1067,11 +1103,11 @@ async function restaurarBackup(input) {
     if (backup.app !== 'PizzAR') { toast('El archivo no es un backup de PizzAR'); return; }
     toast('Restaurando datos...');
     var batch = db.batch(); var count = 0;
-    (backup.ventas||[]).forEach(function(v){var id=v._id;var d=Object.assign({},v);delete d._id;batch.set(db.collection('ventas').doc(id),d);if(++count%400===0){batch.commit();batch=db.batch();}});
-    (backup.productos||[]).forEach(function(v){var id=v._id;var d=Object.assign({},v);delete d._id;batch.set(db.collection('productos').doc(id),d);});
-    (backup.insumos||[]).forEach(function(v){var id=v._id;var d=Object.assign({},v);delete d._id;batch.set(db.collection('insumos').doc(id),d);});
-    (backup.cierres||[]).forEach(function(v){var id=v._id;var d=Object.assign({},v);delete d._id;batch.set(db.collection('cierres').doc(id),d);});
-    if(backup.configuracion&&Object.keys(backup.configuracion).length>0){batch.set(db.collection('configuracion').doc('general'),backup.configuracion,{merge:true});}
+    (backup.ventas||[]).forEach(function(v){var id=v._id;var d=Object.assign({},v);delete d._id;batch.set(db.collection('negocios').doc(uidDueno).collection('ventas').doc(id),d);if(++count%400===0){batch.commit();batch=db.batch();}});
+    (backup.productos||[]).forEach(function(v){var id=v._id;var d=Object.assign({},v);delete d._id;batch.set(db.collection('negocios').doc(uidDueno).collection('productos').doc(id),d);});
+    (backup.insumos||[]).forEach(function(v){var id=v._id;var d=Object.assign({},v);delete d._id;batch.set(db.collection('negocios').doc(uidDueno).collection('insumos').doc(id),d);});
+    (backup.cierres||[]).forEach(function(v){var id=v._id;var d=Object.assign({},v);delete d._id;batch.set(db.collection('negocios').doc(uidDueno).collection('cierres').doc(id),d);});
+    if(backup.configuracion&&Object.keys(backup.configuracion).length>0){batch.set(db.collection('negocios').doc(uidDueno).collection('configuracion').doc('general'),backup.configuracion,{merge:true});}
     await batch.commit();
     toast('✅ Backup restaurado'); input.value='';
     setTimeout(function(){location.reload();},1500);
@@ -1084,6 +1120,30 @@ function chequearBackupDiario() {
   var el = document.getElementById('ultimoBackupFecha'); if (el && ultimo) el.textContent = ultimo;
   if (ultimo !== hoy) { setTimeout(function(){generarBackup(true);},5000); }
 }
+
+
+  async function generarCodigoAcceso() {
+    if (!uidDueno) return;
+    const codigo = Math.floor(100000 + Math.random() * 900000).toString();
+    const pin = pinCajeroActual || '2468';
+    try {
+      await db.collection('accesos').doc(codigo).set({
+        uidDueno, pin, app: 'pizzar',
+        creadoEn: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      const base = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '/');
+      const link = base + '?cajero=' + codigo;
+      const el = document.getElementById('linkCajeroDisplay');
+      if (el) el.textContent = link;
+      const btn = document.getElementById('compartirLinkCajeroBtn');
+      if (btn) btn.onclick = () => {
+        const nombre = document.getElementById('cfgNombre')?.value || 'PizzAR';
+        const msg = nombre + '\nLink para el cajero:\n' + link + '\nPIN: ' + pin;
+        window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
+      };
+    } catch(e) { if(typeof logError!=='undefined') logError('generarCodigoAcceso', e.message); }
+  }
+  function actualizarLinkCajero() { generarCodigoAcceso(); }
 
 </script>
 </body>
