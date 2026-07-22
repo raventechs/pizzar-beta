@@ -670,6 +670,7 @@ input, select, textarea { border-radius: 10px !important; }
         document.getElementById('app').classList.add('active');
         cargarProductos();cargarInsumos();cargarConfiguracion();cargarGastosHoy();
         escucharVentasHoy();
+        setTimeout(actualizarLinkCajero, 1000);
         aplicarRestriccionesPorRol();
         actualizarEstadoConexion(navigator.onLine);
         await actualizarBadge();
